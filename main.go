@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/harshvirani7/my-app/utils"
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,6 +17,7 @@ type metrics struct {
 	devices  prometheus.Gauge
 	info     *prometheus.GaugeVec
 	upgrades *prometheus.CounterVec
+	duration *prometheus.HistogramVec
 }
 
 type Device struct {
@@ -44,7 +46,7 @@ type registerDevicesHandler struct {
 func (rdh registerDevicesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		getDevices(w, r)
+		getDevices(w, r, rdh.metrics)
 	case "POST":
 		createDevice(w, r, rdh.metrics)
 	default:
@@ -67,12 +69,17 @@ func (mdh manageDevicesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func getDevices(w http.ResponseWriter, _ *http.Request) {
+func getDevices(w http.ResponseWriter, _ *http.Request, m *metrics) {
+	now := time.Now()
+
 	b, err := json.Marshal(dvs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	utils.Sleep(200)
+
+	m.duration.With(prometheus.Labels{"method": "GET", "status": "200"}).Observe(time.Since(now).Seconds())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -143,8 +150,17 @@ func NewMetrics(reg prometheus.Registerer) *metrics {
 			Name:      "device_upgrade_total",
 			Help:      "Number of upgraded devices.",
 		}, []string{"type"}),
+		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "myapp",
+			Name:      "request_duration_seconds",
+			Help:      "Duration of the request.",
+			// 4 times larger for apdex score
+			// Buckets: prometheus.ExponentialBuckets(0.1, 1.5, 5),
+			// Buckets: prometheus.LinearBuckets(0.1, 5, 5),
+			Buckets: []float64{0.1, 0.15, 0.2, 0.25, 0.3},
+		}, []string{"status", "method"}),
 	}
-	reg.MustRegister(m.devices, m.info, m.upgrades)
+	reg.MustRegister(m.devices, m.info, m.upgrades, m.duration)
 	return m
 }
 
